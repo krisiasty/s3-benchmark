@@ -40,9 +40,10 @@ var accessKey, secretKey, urlHost, bucket string
 var durationSecs, threads, loops int
 var objectSize uint64
 var objectData []byte
-var runningThreads, uploadCount, downloadCount, deleteCount int64
+var uploadCount, downloadCount, deleteCount int64
 var endtime, uploadFinish, downloadFinish, deleteFinish time.Time
 var jsonPrint bool
+var wg sync.WaitGroup
 
 type logMessage struct {
 	LogTime    time.Time `json:"time"`
@@ -267,10 +268,8 @@ func runUpload(threadNum int) {
 			}
 		}
 	}
-	// Remember last done time
-	uploadFinish = time.Now()
 	// One less thread
-	atomic.AddInt64(&runningThreads, -1)
+	wg.Done()
 }
 
 func runDownload(threadNum int) {
@@ -286,10 +285,8 @@ func runDownload(threadNum int) {
 			io.Copy(ioutil.Discard, resp.Body)
 		}
 	}
-	// Remember last done time
-	downloadFinish = time.Now()
 	// One less thread
-	atomic.AddInt64(&runningThreads, -1)
+	wg.Done()
 }
 
 func runDelete(threadNum int) {
@@ -305,10 +302,8 @@ func runDelete(threadNum int) {
 			log.Fatalf("FATAL: Error deleting object %s: %v", prefix, err)
 		}
 	}
-	// Remember last done time
-	deleteFinish = time.Now()
 	// One less thread
-	atomic.AddInt64(&runningThreads, -1)
+	wg.Done()
 }
 
 func main() {
@@ -330,7 +325,7 @@ func main() {
 
 	// Hello
 	if !jsonPrint {
-		fmt.Println("S3 benchmark program v3.0")
+		fmt.Println("S3 benchmark program v3.1")
 	}
 
 	// Check the arguments
@@ -386,17 +381,15 @@ func main() {
 		uploadCount = 0
 		downloadCount = 0
 		// Run the upload case
-		runningThreads = int64(threads)
 		starttime := time.Now()
 		endtime = starttime.Add(time.Second * time.Duration(durationSecs))
+		wg.Add(threads)
 		for n := 1; n <= threads; n++ {
 			go runUpload(n)
 		}
-
 		// Wait for it to finish
-		for atomic.LoadInt64(&runningThreads) > 0 {
-			time.Sleep(time.Millisecond)
-		}
+		wg.Wait()
+		uploadFinish = time.Now()
 		uploadTime := uploadFinish.Sub(starttime).Seconds()
 
 		bps := float64(uint64(uploadCount)*objectSize) / uploadTime
@@ -407,22 +400,20 @@ func main() {
 			Time:       uploadTime,
 			Objects:    uploadCount,
 			Speed:      bytefmt.ByteSize(uint64(bps)),
-			RawSpeed:   uint64(bps), 
+			RawSpeed:   uint64(bps),
 			Operations: (float64(uploadCount) / uploadTime),
 		})
 
 		// Run the download case
-		runningThreads = int64(threads)
 		starttime = time.Now()
 		endtime = starttime.Add(time.Second * time.Duration(durationSecs))
+		wg.Add(threads)
 		for n := 1; n <= threads; n++ {
 			go runDownload(n)
 		}
-
 		// Wait for it to finish
-		for atomic.LoadInt64(&runningThreads) > 0 {
-			time.Sleep(time.Millisecond)
-		}
+		wg.Wait()
+		downloadFinish = time.Now()
 		downloadTime := downloadFinish.Sub(starttime).Seconds()
 
 		bps = float64(uint64(downloadCount)*objectSize) / downloadTime
@@ -438,17 +429,16 @@ func main() {
 		})
 
 		// Run the delete case
-		runningThreads = int64(threads)
 		starttime = time.Now()
 		endtime = starttime.Add(time.Second * time.Duration(durationSecs))
+		wg.Add(threads)
 		for n := 1; n <= threads; n++ {
 			go runDelete(n)
 		}
 
 		// Wait for it to finish
-		for atomic.LoadInt64(&runningThreads) > 0 {
-			time.Sleep(time.Millisecond)
-		}
+		wg.Wait()
+		deleteFinish = time.Now()
 		deleteTime := deleteFinish.Sub(starttime).Seconds()
 
 		logit(logMessage{
